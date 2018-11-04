@@ -11,6 +11,7 @@ BT_MAC_REGEX = re.compile("(?:[0-9a-fA-F]:?){12}")
 BT_NAME_REGEX = re.compile("[0-9A-Za-z ]+(?=\s\()")
 BT_CONNECTED_REGEX = re.compile("(Connected: [0-1])")
 USB_ID_REGEX = re.compile("([0-9a-fA-F]{4}:[0-9a-fA-F]{4})")
+CD_REGEX = re.compile("drive name:\\t\\t(\w+)")
 
 
 class KillerPosix(KillerBase):
@@ -117,26 +118,70 @@ class KillerPosix(KillerBase):
                 pass
 
     def detect_tray(self):
-        disk_tray = self.config['linux']['CDROM_DRIVE']
-        fd = os.open(disk_tray, os.O_RDONLY | os.O_NONBLOCK)
-        rv = fcntl.ioctl(fd, 0x5326)
-        os.close(fd)
         if self.DEBUG:
-            print('CD Tray:')
-            print(rv)
-            print()
+            cdrom_command = subprocess.check_output(["cat", "/proc/sys/dev/cdrom/info"])
+            all_cdroms = re.findall(CD_REGEX, cdrom_command)
+            tray_statuses = []
+            if all_cdroms:
+                print('CD Trays:')
+                if len(all_cdroms) >= 2:
+                    print(', '.join(all_cdroms))
+                elif len(all_cdroms) == 1:
+                    print(all_cdroms[0])
+                print('Tray Statuses:')
+                for each in all_cdroms:
+                    disk_tray = os.path.join('/dev/' + each)
+                    fd = os.open(disk_tray, os.O_RDONLY | os.O_NONBLOCK)
+                    rv = fcntl.ioctl(fd, 0x5326)
+                    os.close(fd)
+                    tray_statuses.append(rv)
+                if len(tray_statuses) >= 2:
+                    print(', '.join(tray_statuses))
+                elif len(tray_statuses) == 1:
+                    print(tray_statuses[0])
+                print()
+            else:
+                print("None detected\n")
         else:
-            if rv != 1:
+            # self.config['linux']['CDROM_DRIVE'] should be a dictionary
+            disk_tray = self.config['linux']['CDROM_DRIVE']
+            fd = os.open(disk_tray, os.O_RDONLY | os.O_NONBLOCK)
+            rv = fcntl.ioctl(fd, 0x5326)
+            os.close(fd)
+            if rv != self.config['linux']['WHITELISTED_STATUS']:
                 self.kill_the_system('CD Tray')
 
     def detect_ethernet(self):
-        with open(self.config['linux']['ETHERNET_CONNECTED']) as ethernet:
-            connected = int(ethernet.readline().strip())
         if self.DEBUG:
-            print("Ethernet:")
-            print(connected)
+            ethernet_interfaces = []
+            ethernet_statuses = []
+            for each in os.listdir('/sys/class/net/'):
+                if each == 'lo':
+                    pass
+                else:
+                    wireless_dir = os.path.join('/sys/class/net/{0}/wireless'.format(each))
+                    if not os.path.isdir(wireless_dir):
+                        ethernet_interfaces.append(each)
+                        carrier_file = os.path.join('/sys/class/net/{0}/carrier'.format(each))
+                        with open(carrier_file, 'r') as ethernet_carrier:
+                            connected = ethernet_carrier.readline()
+                            ethernet_statuses.append(connected)
+            if ethernet_interfaces:
+                print('Ethernet Interface:')
+                if len(ethernet_interfaces) >= 2:
+                    print(', '.join(ethernet_interfaces))
+                elif len(ethernet_interfaces) == 1:
+                    print(ethernet_interfaces[0])
+                print('Ethernet Status:')
+                if len(ethernet_statuses) >= 2:
+                    print(', '.join(ethernet_statuses))
+                elif len(ethernet_statuses) == 1:
+                    print(ethernet_statuses[0])
         else:
-            if connected:
+            # should this also be a dictionary?
+            with open(self.config['linux']['ETHERNET_CONNECTED']) as ethernet:
+                connected = int(ethernet.readline().strip())
+            if connected != self.config['linux']['ETHERNET_WHITELIST']:
                 self.kill_the_system('Ethernet')
 
     def kill_the_system(self, warning: str):
